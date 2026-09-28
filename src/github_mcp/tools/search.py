@@ -32,9 +32,10 @@ from github_mcp.models import (
     UserSort,
 )
 from github_mcp.utils import (
-    _handle_api_error,
+    READ_ONLY_TOOL_ANNOTATIONS,
     build_search_response,
     get_github_client,
+    handle_api_error,
     render_code,
     render_commit,
     render_issue,
@@ -76,7 +77,7 @@ async def _search(
     try:
         data = await client.search(endpoint, query_params, text_match=text_match)
     except Exception as e:
-        return _handle_api_error(e, endpoint, hint=error_hint)
+        return handle_api_error(e, endpoint, hint=error_hint)
 
     return build_search_response(
         data,
@@ -94,13 +95,7 @@ def register_search_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="github_search_repos",
-        annotations={
-            "title": "Search GitHub Repositories",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        annotations={"title": "Search GitHub Repositories", **READ_ONLY_TOOL_ANNOTATIONS},
     )
     async def github_search_repos(
         q: Annotated[str, Q_FIELD],
@@ -130,13 +125,7 @@ def register_search_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="github_search_code",
-        annotations={
-            "title": "Search GitHub Code",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        annotations={"title": "Search GitHub Code", **READ_ONLY_TOOL_ANNOTATIONS},
     )
     async def github_search_code(
         q: Annotated[str, Q_FIELD],
@@ -167,13 +156,7 @@ def register_search_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="github_search_issues",
-        annotations={
-            "title": "Search GitHub Issues and Pull Requests",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        annotations={"title": "Search GitHub Issues and Pull Requests", **READ_ONLY_TOOL_ANNOTATIONS},
     )
     async def github_search_issues(
         q: Annotated[str, Q_FIELD],
@@ -206,13 +189,7 @@ def register_search_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="github_search_commits",
-        annotations={
-            "title": "Search GitHub Commits",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        annotations={"title": "Search GitHub Commits", **READ_ONLY_TOOL_ANNOTATIONS},
     )
     async def github_search_commits(
         q: Annotated[str, Q_FIELD],
@@ -239,13 +216,7 @@ def register_search_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="github_search_users",
-        annotations={
-            "title": "Search GitHub Users",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        annotations={"title": "Search GitHub Users", **READ_ONLY_TOOL_ANNOTATIONS},
     )
     async def github_search_users(
         q: Annotated[str, Q_FIELD],
@@ -272,13 +243,7 @@ def register_search_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="github_search_topics",
-        annotations={
-            "title": "Search GitHub Topics",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        annotations={"title": "Search GitHub Topics", **READ_ONLY_TOOL_ANNOTATIONS},
     )
     async def github_search_topics(
         q: Annotated[str, Q_FIELD],
@@ -304,13 +269,7 @@ def register_search_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="github_search_labels",
-        annotations={
-            "title": "Search GitHub Labels",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        annotations={"title": "Search GitHub Labels", **READ_ONLY_TOOL_ANNOTATIONS},
     )
     async def github_search_labels(
         q: Annotated[str, Q_FIELD],

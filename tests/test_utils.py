@@ -6,38 +6,45 @@ import pytest
 from github_mcp.client import GitHubAPIError
 from github_mcp.models import ResponseFormat
 from github_mcp.utils import (
-    _handle_api_error,
+    MAX_OUTPUT_CHARS,
     _pagination,
     build_search_response,
+    handle_api_error,
     render_commit,
     render_issue,
     render_repo,
     render_topic,
     render_user,
+    truncate_output,
 )
 
 
 class TestErrorMapping:
     def test_401(self):
-        msg = _handle_api_error(GitHubAPIError("Bad credentials", 401))
+        msg = handle_api_error(GitHubAPIError("Bad credentials", 401))
         assert "GITHUB_TOKEN" in msg
 
     def test_403_includes_reset_time(self):
-        msg = _handle_api_error(GitHubAPIError("rate limit", 403, reset_ts="2000000000"))
+        msg = handle_api_error(GitHubAPIError("rate limit", 403, reset_ts="2000000000"))
         assert "403" in msg
         assert "resets at" in msg
 
+    def test_403_malformed_reset_ts_does_not_crash(self):
+        msg = handle_api_error(GitHubAPIError("rate limit", 403, reset_ts="not-a-number"))
+        assert "403" in msg
+        assert "resets at" not in msg
+
     def test_404(self):
-        msg = _handle_api_error(GitHubAPIError("Not Found", 404), "foo/bar")
+        msg = handle_api_error(GitHubAPIError("Not Found", 404), "foo/bar")
         assert "404" in msg
         assert "owner/name" in msg
 
     def test_422(self):
-        msg = _handle_api_error(GitHubAPIError("Validation Failed", 422))
+        msg = handle_api_error(GitHubAPIError("Validation Failed", 422))
         assert "qualifier" in msg
 
     def test_422_with_hint(self):
-        msg = _handle_api_error(
+        msg = handle_api_error(
             GitHubAPIError("Validation Failed", 422),
             "issues",
             hint="With a GITHUB_TOKEN, GitHub requires 'is:issue' or 'is:pull-request' in the query.",
@@ -45,15 +52,15 @@ class TestErrorMapping:
         assert "is:issue" in msg
 
     def test_503(self):
-        msg = _handle_api_error(GitHubAPIError("Service Unavailable", 503))
+        msg = handle_api_error(GitHubAPIError("Service Unavailable", 503))
         assert "503" in msg
 
     def test_timeout(self):
-        msg = _handle_api_error(httpx.TimeoutException("slow"))
+        msg = handle_api_error(httpx.TimeoutException("slow"))
         assert "timed out" in msg
 
     def test_unknown(self):
-        msg = _handle_api_error(RuntimeError("boom"))
+        msg = handle_api_error(RuntimeError("boom"))
         assert "RuntimeError" in msg
 
 
@@ -70,6 +77,15 @@ class TestPagination:
 
     def test_search_cap_1000(self):
         meta = _pagination(total_count=5000, per_page=100, page=10, returned=100)
+        assert meta["has_more"] is False
+
+    def test_paging_allowed_within_first_1000(self):
+        meta = _pagination(total_count=5000, per_page=20, page=1, returned=20)
+        assert meta["has_more"] is True
+        assert meta["next_page"] == 2
+
+    def test_paging_stops_at_1000_boundary(self):
+        meta = _pagination(total_count=5000, per_page=20, page=50, returned=20)
         assert meta["has_more"] is False
 
 
@@ -110,6 +126,35 @@ class TestSearchResponse:
         assert "octocat/Hello-World" in out
         assert "★ 123" in out
         assert "Language: Ruby" in out
+
+    def test_markdown_shows_rate_limit_and_incomplete(self):
+        item = {"full_name": "a/b", "owner": {"login": "a"}, "html_url": "u"}
+        data = {"total_count": 1, "items": [item], "incomplete_results": True}
+        out = build_search_response(data, "items", render_repo, 20, 1, ResponseFormat.MARKDOWN, "5")
+        assert "rate limit remaining: 5" in out
+        assert "incomplete results" in out
+
+    def test_json_trims_items_to_fit_budget(self):
+        big = "x" * MAX_OUTPUT_CHARS
+        items = [{"full_name": f"a/{i}", "owner": {"login": "a"}, "description": big} for i in range(3)]
+        data = {"total_count": 3, "items": items}
+        out = build_search_response(data, "items", render_repo, 20, 1, ResponseFormat.JSON, None)
+        import json
+
+        parsed = json.loads(out)
+        assert parsed["truncated"] is True
+        assert parsed["count"] == len(parsed["items"]) < 3
+        assert len(out) <= MAX_OUTPUT_CHARS + 1
+
+
+class TestTruncateOutput:
+    def test_short_text_unchanged(self):
+        assert truncate_output("hello") == "hello"
+
+    def test_long_text_truncated_with_note(self):
+        out = truncate_output("x" * (MAX_OUTPUT_CHARS + 100))
+        assert "truncated" in out
+        assert len(out) < MAX_OUTPUT_CHARS + 200
 
 
 class TestRenderers:

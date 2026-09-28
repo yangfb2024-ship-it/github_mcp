@@ -3,6 +3,7 @@
 from github_mcp.tools.detail import (
     _render_dir_md,
     _render_file_md,
+    _render_issue_md,
     _render_readme_md,
     _render_repo_md,
 )
@@ -77,3 +78,40 @@ class TestDirMd:
         assert "# Directory: pkg" in out
         assert out.index("dir/` src") < out.index("file` a.py")
         assert "file` b.py" in out
+
+
+class TestIssueMd:
+    def _issue(self, **overrides):
+        data = {
+            "title": "Fix thing",
+            "state": "closed",
+            "labels": [{"name": "bug"}],
+            "user": {"login": "octocat"},
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-02T00:00:00Z",
+            "comments": 3,
+            "html_url": "https://github.com/a/b/issues/1",
+            "body": "Body text",
+        }
+        data.update(overrides)
+        return data
+
+    def test_plain_issue(self):
+        out = _render_issue_md(self._issue(), "a/b", 1)
+        assert "# a/b#1: Fix thing" in out
+        assert "State: closed" in out
+        assert "Pull request" not in out
+
+    def test_pr_merged_at_from_nested_pull_request(self):
+        issue = self._issue(pull_request={"merged_at": "2024-02-01T00:00:00Z"})
+        out = _render_issue_md(issue, "a/b", 1, pr_data={"merge_commit_sha": "abc123"})
+        assert "*(Pull request)*" in out
+        assert "**Merged** on 2024-02-01" in out
+        assert "Merge commit: abc123" in out
+
+    def test_pr_without_merge_info(self):
+        issue = self._issue(pull_request={"merged_at": None})
+        out = _render_issue_md(issue, "a/b", 1)
+        assert "*(Pull request)*" in out
+        assert "Merged" not in out
+        assert "Merge commit" not in out

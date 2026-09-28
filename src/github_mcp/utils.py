@@ -14,6 +14,14 @@ from mcp.server.fastmcp import Context
 from github_mcp.client import GitHubAPIError, GitHubClient
 
 MAX_SEARCH_RESULTS = 1000
+MAX_OUTPUT_CHARS = 25_000
+
+READ_ONLY_TOOL_ANNOTATIONS = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": True,
+}
 
 
 def get_github_client(ctx: Context) -> GitHubClient:
@@ -21,7 +29,18 @@ def get_github_client(ctx: Context) -> GitHubClient:
     return ctx.request_context.lifespan_context["github"]
 
 
-def _handle_api_error(e: Exception, endpoint: str = "", hint: str = "") -> str:
+def truncate_output(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
+    '''Cap output size to protect LLM context; appends a note when truncating.'''
+    if len(text) <= limit:
+        return text
+    return (
+        text[:limit].rstrip()
+        + f"\n\n> [Output truncated at {limit} characters. "
+        "Refine the query or lower per_page for more focused results.]"
+    )
+
+
+def handle_api_error(e: Exception, endpoint: str = "", hint: str = "") -> str:
     '''Map exceptions to actionable, non-revealing error messages.'''
     if isinstance(e, GitHubAPIError):
         status = e.status_code
@@ -32,8 +51,12 @@ def _handle_api_error(e: Exception, endpoint: str = "", hint: str = "") -> str:
                 "Code search and some private resources require authentication."
             )
         if status == 403:
-            reset_ts = int(float(e.reset_ts)) if getattr(e, "reset_ts", None) else None
-            when = f" It resets at {time.strftime('%H:%M:%S UTC', time.gmtime(reset_ts))}." if reset_ts else ""
+            raw_ts = e.reset_ts if e.reset_ts and str(e.reset_ts).isdigit() else None
+            when = (
+                f" It resets at {time.strftime('%H:%M:%S UTC', time.gmtime(int(raw_ts)))}."
+                if raw_ts
+                else ""
+            )
             return (
                 f"Error: Forbidden or rate limit exceeded (403): {e.message}.{when} "
                 "Authenticate with GITHUB_TOKEN to raise the limit, or wait for the "
@@ -65,7 +88,10 @@ def _handle_api_error(e: Exception, endpoint: str = "", hint: str = "") -> str:
 def _pagination(total_count: int, per_page: int, page: int, returned: int) -> Dict[str, Any]:
     '''Build consistent pagination metadata.'''
     offset = (page - 1) * per_page
-    has_more = offset + returned < total_count and total_count <= MAX_SEARCH_RESULTS
+    # GitHub only serves the first MAX_SEARCH_RESULTS hits, but paging within
+    # that window is still possible even when total_count exceeds it.
+    reachable = min(total_count, MAX_SEARCH_RESULTS)
+    has_more = offset + returned < reachable
     return {
         "total_count": total_count,
         "count": returned,
@@ -86,7 +112,7 @@ def build_search_response(
     rate_limit_remaining: Optional[str],
 ) -> str:
     '''Turn a raw GitHub search response into markdown or JSON.'''
-    items: List[Dict[str, Any]] = data.get(items_key, [])
+    items: List[Dict[str, Any]] = list(data.get(items_key, []))
     total_count = int(data.get("total_count", 0))
     meta = _pagination(total_count, per_page, page, len(items))
     if rate_limit_remaining is not None:
@@ -95,7 +121,19 @@ def build_search_response(
         meta["incomplete_results"] = data["incomplete_results"]
 
     if response_format.value == "json":
-        return json.dumps({"items": items, **meta}, indent=2, ensure_ascii=False)
+        # Trim items until the payload fits the output budget, keeping the
+        # document valid JSON and flagging the truncation explicitly.
+        truncated = False
+        while True:
+            meta["count"] = len(items)
+            payload = {"items": items, **meta}
+            if truncated:
+                payload["truncated"] = True
+            out = json.dumps(payload, indent=2, ensure_ascii=False)
+            if len(out) <= MAX_OUTPUT_CHARS or not items:
+                return out
+            items.pop()
+            truncated = True
 
     if not items:
         return f"No results found for query. Total matches: {total_count}."
@@ -109,7 +147,11 @@ def build_search_response(
         lines.append("")
     if meta["has_more"]:
         lines.append(f"> More results available (page {meta['next_page']}). Use page={meta['next_page']} to continue.")
-    return "\n".join(lines)
+    if meta.get("incomplete_results"):
+        lines.append("> Note: GitHub reports incomplete results (search timed out). Retry or narrow the query.")
+    if rate_limit_remaining is not None:
+        lines.append(f"> API rate limit remaining: {rate_limit_remaining}")
+    return truncate_output("\n".join(lines))
 
 
 def _render_text_matches(item: Dict[str, Any]) -> List[str]:

@@ -17,7 +17,12 @@ from github_mcp.models import (
     RESPONSE_FORMAT_DETAIL_FIELD,
     ResponseFormat,
 )
-from github_mcp.utils import _handle_api_error, get_github_client
+from github_mcp.utils import (
+    READ_ONLY_TOOL_ANNOTATIONS,
+    get_github_client,
+    handle_api_error,
+    truncate_output,
+)
 
 MAX_INLINE_FILE_SIZE = 2_000_000
 
@@ -26,7 +31,7 @@ def _client(ctx: Context) -> GitHubClient:
     return get_github_client(ctx)
 
 
-def _json_or(data: Any) -> str:
+def _to_json(data: Any) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
@@ -90,18 +95,51 @@ def _render_dir_md(data: Any, path: str) -> str:
     return "\n".join(lines)
 
 
+def _render_issue_md(
+    data: Dict[str, Any],
+    repo: str,
+    issue_number: int,
+    pr_data: Optional[Dict[str, Any]] = None,
+) -> str:
+    '''Render an issue/PR payload as markdown.
+
+    The issues API nests PR info under 'pull_request' (merged_at lives there)
+    and never exposes merge_commit_sha; that field comes from the pulls API,
+    passed in via pr_data on a best-effort basis.
+    '''
+    title = data.get("title", "(no title)")
+    state = data.get("state", "?")
+    labels = ", ".join(l.get("name", "") for l in data.get("labels", []) if l.get("name"))
+    author = (data.get("user") or {}).get("login", "?")
+    lines = [
+        f"# {repo}#{issue_number}: {title}",
+        f"- **State: {state}** | Labels: {labels or 'none'}",
+        f"- By **{author}** | Created: {(data.get('created_at') or '')[:10]} | "
+        f"Updated: {(data.get('updated_at') or '')[:10]} | Comments: {data.get('comments', 0)}",
+    ]
+    if data.get("assignees"):
+        lines.append(f"- Assignees: {', '.join(u.get('login', '?') for u in data['assignees'])}")
+    pr = data.get("pull_request")
+    if pr:
+        lines.append("- *(Pull request)*")
+        merged_at = pr.get("merged_at")
+        if merged_at:
+            lines.append(f"- **Merged** on {merged_at[:10]}")
+        merge_sha = (pr_data or {}).get("merge_commit_sha")
+        if merge_sha:
+            lines.append(f"- Merge commit: {merge_sha}")
+    lines.append(f"- URL: {data.get('html_url', '')}")
+    body = data.get("body") or "(no body)"
+    lines += ["", "---", "", "## Body", "", body]
+    return "\n".join(lines)
+
+
 def register_detail_tools(mcp: FastMCP) -> None:
     '''Register all detail-retrieval tools on the given server instance.'''
 
     @mcp.tool(
         name="github_get_repo",
-        annotations={
-            "title": "Get GitHub Repository Details",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        annotations={"title": "Get GitHub Repository Details", **READ_ONLY_TOOL_ANNOTATIONS},
     )
     async def github_get_repo(
         repo: Annotated[str, REPO_FIELD],
@@ -121,20 +159,14 @@ def register_detail_tools(mcp: FastMCP) -> None:
         try:
             data = await client.get(f"/repos/{repo}")
         except Exception as e:
-            return _handle_api_error(e, repo)
+            return handle_api_error(e, repo)
         if response_format.value == "json":
-            return _json_or(data)
+            return _to_json(data)
         return _render_repo_md(data)
 
     @mcp.tool(
         name="github_get_repo_readme",
-        annotations={
-            "title": "Get Repository README",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        annotations={"title": "Get Repository README", **READ_ONLY_TOOL_ANNOTATIONS},
     )
     async def github_get_repo_readme(
         repo: Annotated[str, REPO_FIELD],
@@ -155,23 +187,24 @@ def register_detail_tools(mcp: FastMCP) -> None:
         try:
             data = await client.get(f"/repos/{repo}/readme", params_)
         except Exception as e:
-            return _handle_api_error(e, repo)
+            return handle_api_error(e, repo)
         if response_format.value == "json":
-            return _json_or(data)
+            return _to_json(data)
         content = ""
         if data.get("encoding") == "base64" and data.get("content"):
             content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
-        return _render_readme_md(data.get("path", "README"), content, data.get("html_url", ""))
+        elif data.get("size", 0) > 0:
+            # README too large for the JSON payload (GitHub truncates content
+            # above 1 MB); fall back to the raw media type.
+            try:
+                content = await client.get_raw(f"/repos/{repo}/readme", params_)
+            except Exception:
+                content = ""
+        return truncate_output(_render_readme_md(data.get("path", "README"), content, data.get("html_url", "")))
 
     @mcp.tool(
         name="github_get_file_content",
-        annotations={
-            "title": "Get File or Directory Content",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        annotations={"title": "Get File or Directory Content", **READ_ONLY_TOOL_ANNOTATIONS},
     )
     async def github_get_file_content(
         repo: Annotated[str, REPO_FIELD],
@@ -195,9 +228,9 @@ def register_detail_tools(mcp: FastMCP) -> None:
         try:
             data = await client.get(f"/repos/{repo}/contents/{path}", params_)
         except Exception as e:
-            return _handle_api_error(e, repo)
+            return handle_api_error(e, repo)
         if response_format.value == "json":
-            return _json_or(data)
+            return _to_json(data)
 
         if isinstance(data, list):
             return _render_dir_md(data, path)
@@ -209,17 +242,11 @@ def register_detail_tools(mcp: FastMCP) -> None:
                 f"- Download: {data.get('download_url')}\n"
                 f"- URL: {data.get('html_url', '')}"
             )
-        return _render_file_md(data, content)
+        return truncate_output(_render_file_md(data, content))
 
     @mcp.tool(
         name="github_get_issue",
-        annotations={
-            "title": "Get Issue or Pull Request Details",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        annotations={"title": "Get Issue or Pull Request Details", **READ_ONLY_TOOL_ANNOTATIONS},
     )
     async def github_get_issue(
         repo: Annotated[str, REPO_FIELD],
@@ -239,29 +266,16 @@ def register_detail_tools(mcp: FastMCP) -> None:
         try:
             data = await client.get(f"/repos/{repo}/issues/{issue_number}")
         except Exception as e:
-            return _handle_api_error(e, repo)
+            return handle_api_error(e, repo)
         if response_format.value == "json":
-            return _json_or(data)
+            return _to_json(data)
 
-        title = data.get("title", "(no title)")
-        state = data.get("state", "?")
-        labels = ", ".join(l.get("name", "") for l in data.get("labels", []) if l.get("name"))
-        author = (data.get("user") or {}).get("login", "?")
-        lines = [
-            f"# {repo}#{issue_number}: {title}",
-            f"- **State: {state}** | Labels: {labels or 'none'}",
-            f"- By **{author}** | Created: {(data.get('created_at') or '')[:10]} | "
-            f"Updated: {(data.get('updated_at') or '')[:10]} | Comments: {data.get('comments', 0)}",
-        ]
-        if data.get("assignees"):
-            lines.append(f"- Assignees: {', '.join(u.get('login', '?') for u in data['assignees'])}")
+        # merge_commit_sha is not part of the issues payload; fetch the PR
+        # detail on a best-effort basis (merge info is nice-to-have).
+        pr_data = None
         if data.get("pull_request"):
-            lines.append("- *(Pull request)*")
-            if data.get("merged_at"):
-                lines.append(f"- **Merged** on {(data['merged_at'] or '')[:10]}")
-            if data.get("merge_commit_sha"):
-                lines.append(f"- Merge commit: {data['merge_commit_sha']}")
-        lines.append(f"- URL: {data.get('html_url', '')}")
-        body = data.get("body") or "(no body)"
-        lines += ["", "---", "", "## Body", "", body]
-        return "\n".join(lines)
+            try:
+                pr_data = await client.get(f"/repos/{repo}/pulls/{issue_number}")
+            except Exception:
+                pr_data = None
+        return truncate_output(_render_issue_md(data, repo, issue_number, pr_data))

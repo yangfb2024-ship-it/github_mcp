@@ -186,22 +186,21 @@ class IssueDetailInput(RepoInput):
 
 
 # --- Field descriptors & type aliases for flattened tool signatures ---------
-# FastMCP builds a tool's input schema from the function signature. Sharing the
-# Pydantic Field metadata here keeps descriptions/constraints DRY between the
-# validation models and the registered tool functions.
+# FastMCP builds a tool's input schema from the function signature, so these
+# Field descriptors are shared via Annotated[...] metadata. The BaseModel
+# classes above remain the single source of truth: field constraints (pattern,
+# min/max, Literal choices) flow into the tool schemas, and the models
+# themselves are unit-tested directly. Sort aliases are derived from the model
+# field annotations to avoid declaring the Literal choices twice.
 
 SortValues = Literal["desc", "asc"]
-RepoSort = Optional[Literal["stars", "forks", "help-wanted-issues", "updated"]]
-CodeSort = Optional[Literal["indexed"]]
-IssueSort = Optional[Literal[
-    "comments", "reactions", "reactions-+1", "reactions--1", "reactions-smile",
-    "reactions-thinking_face", "reactions-heart", "reactions-tada",
-    "interactions", "created", "updated",
-]]
-CommitSort = Optional[Literal["author-date", "committer-date"]]
-UserSort = Optional[Literal["followers", "repositories", "joined"]]
-TopicSort = Optional[Literal["created", "updated"]]
-LabelSort = Optional[Literal["created", "updated"]]
+RepoSort = RepoSearchInput.model_fields["sort"].annotation
+CodeSort = CodeSearchInput.model_fields["sort"].annotation
+IssueSort = IssueSearchInput.model_fields["sort"].annotation
+CommitSort = CommitSearchInput.model_fields["sort"].annotation
+UserSort = UserSearchInput.model_fields["sort"].annotation
+TopicSort = TopicSearchInput.model_fields["sort"].annotation
+LabelSort = LabelSearchInput.model_fields["sort"].annotation
 
 Q_FIELD = SearchInput.model_fields["q"]
 ORDER_FIELD = SearchInput.model_fields["order"]

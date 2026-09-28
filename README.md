@@ -44,8 +44,7 @@ pip install -e ".[dev]"
 | `MCP_TRANSPORT` | `streamable_http` | 设 `stdio` 切到本地 stdio |
 
 ```bash
-cp .env.example .env   # 填入 GITHUB_TOKEN
-export $(grep -v '^#' .env | xargs)
+cp .env.example .env   # 填入 GITHUB_TOKEN；服务器启动时自动加载 .env（支持引号包裹的值）
 ```
 
 ## 运行
@@ -83,7 +82,10 @@ MCP_TRANSPORT=stdio python -m github_mcp.server
 
 - 工具命名统一 `github_` 前缀，注解全部 `readOnlyHint=True`（纯数据检索）
 - 所有 search 工具支持 `response_format=markdown|json` 双格式输出
-- 分页：`per_page`(1-100) + `page`，响应带 `total_count`/`has_more`/`next_page`，单次搜索上限 1000 条
+- 分页：`per_page`(1-100) + `page`，响应带 `total_count`/`has_more`/`next_page`；GitHub 只提供前 1000 条，窗口内可正常翻页
 - code/issues/commits 请求 `text-match` 媒体类型，返回命中片段方便定位
 - 错误信息可行动：401 → 提示配 token；403 → 提示限速/等待；422 → 提示 qualifier 语法
+- 5xx 与连接错误自动线性退避重试（最多 2 次）；所有请求均为只读 GET，重试安全
+- 输出带字符预算（约 25k）：超长时 markdown 截断并提示收窄查询，JSON 自动裁减条目并标记 `truncated`
+- PR 详情会从 pulls 端点补充 `merge_commit_sha`（issues 端点不返回该字段）
 - token 从环境变量读取，不入代码；校验失败不会暴露内部错误

@@ -17,8 +17,14 @@ from github_mcp.client import GitHubClient
 from github_mcp.tools.detail import register_detail_tools
 from github_mcp.tools.search import register_search_tools
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _strip_quotes(value: str) -> str:
+    '''Remove one layer of matching surrounding quotes, if present.'''
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
 
 
 def _load_dotenv(path: str = ".env") -> None:
@@ -33,15 +39,12 @@ def _load_dotenv(path: str = ".env") -> None:
                     continue
                 key, _, value = line.partition("=")
                 key = key.strip()
-                value = value.strip()
+                value = _strip_quotes(value.strip())
                 if key and key not in os.environ:
                     os.environ[key] = value
         logger.info("Loaded environment from %s", path)
     except OSError as e:  # pragma: no cover
         logger.warning("Could not read %s: %s", path, e)
-
-
-_load_dotenv()
 
 
 @asynccontextmanager
@@ -84,8 +87,13 @@ def create_server(host: str = "127.0.0.1", port: int = 8000) -> FastMCP:
 
 def main() -> None:
     '''Entry point: run over streamable HTTP unless MCP_TRANSPORT=stdio.'''
+    logging.basicConfig(level=logging.INFO)
+    _load_dotenv()
     host = os.getenv("HOST", "127.0.0.1")
-    port = int(os.getenv("PORT", "8000"))
+    try:
+        port = int(os.getenv("PORT", "8000"))
+    except ValueError:
+        raise SystemExit(f"Invalid PORT {os.getenv('PORT')!r}: must be an integer.")
     mcp = create_server(host=host, port=port)
     transport = os.getenv("MCP_TRANSPORT", "streamable_http")
     if transport == "stdio":

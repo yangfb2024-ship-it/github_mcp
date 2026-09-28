@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
@@ -12,6 +13,12 @@ from github_mcp import __version__
 API_BASE_URL = "https://api.github.com"
 API_VERSION = "2022-11-28"
 REQUEST_TIMEOUT = 30.0
+MAX_RETRIES = 2
+RETRY_BACKOFF = 0.5  # seconds; linear backoff (0.5s, 1.0s)
+RETRYABLE_STATUSES = frozenset({500, 502, 503, 504})
+
+TEXT_MATCH_ACCEPT = "application/vnd.github.text-match+json"
+RAW_ACCEPT = "application/vnd.github.raw+json"
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +49,9 @@ class GitHubClient:
 
     All tools share a single instance via the server lifespan. The client
     tracks the latest rate-limit headers so tools can surface remaining
-    quota to the agent.
+    quota to the agent. Transient failures (5xx, connection errors) are
+    retried with linear backoff; all requests are read-only GETs, so
+    retrying is safe.
     '''
 
     def __init__(self, token: Optional[str] = None) -> None:
@@ -91,28 +100,63 @@ class GitHubClient:
             text_match: Add the text-match media type to highlight matching terms.
 
         Raises:
-            GitHubAPIError: On any non-2xx response.
-            httpx.TimeoutException: On request timeout.
+            GitHubAPIError: On any non-2xx response (after retries).
+            httpx.HTTPError: On network/timeout failures (after retries).
         '''
-        headers = self._base_headers()
-        if text_match:
-            headers["Accept"] = "application/vnd.github.text-match+json"
-
-        try:
-            response = await self._client.request(
-                method, path, params=params, headers=headers
-            )
-        except httpx.HTTPStatusError as e:  # pragma: no cover - defensive
-            raise GitHubAPIError(str(e), getattr(e.response, "status_code", None))
+        headers = {"Accept": TEXT_MATCH_ACCEPT} if text_match else None
+        response = await self._send(method, path, params, headers)
 
         self._record_rate_limit(response)
-
         if response.is_error:
             raise self._build_error(response)
 
         if not response.content:
             return {}
-        return response.json()
+        try:
+            return response.json()
+        except ValueError:
+            logger.warning("Non-JSON body returned for %s %s", method, path)
+            return {}
+
+    async def get_raw(self, path: str, params: Optional[Dict[str, Any]] = None) -> str:
+        '''GET returning the raw body (raw media type) instead of JSON metadata.
+
+        Useful for README/file payloads that are too large for the JSON
+        representation (which truncates content above 1 MB).
+        '''
+        response = await self._send("GET", path, params, {"Accept": RAW_ACCEPT})
+        self._record_rate_limit(response)
+        if response.is_error:
+            raise self._build_error(response)
+        return response.text
+
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        params: Optional[Dict[str, Any]],
+        headers: Optional[Dict[str, str]],
+    ) -> httpx.Response:
+        '''Send a request, retrying transient failures with linear backoff.'''
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = await self._client.request(
+                    method, path, params=params, headers=headers
+                )
+            except httpx.ConnectError:
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
+                    continue
+                raise
+            if response.status_code in RETRYABLE_STATUSES and attempt < MAX_RETRIES:
+                logger.warning(
+                    "GitHub %s %s returned %s; retrying (%d/%d)",
+                    method, path, response.status_code, attempt + 1, MAX_RETRIES,
+                )
+                await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
+                continue
+            return response
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def _record_rate_limit(self, response: httpx.Response) -> None:
         self.rate_limit_remaining = response.headers.get("X-RateLimit-Remaining")
