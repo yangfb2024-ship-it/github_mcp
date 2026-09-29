@@ -37,6 +37,8 @@ def _load_dotenv(path: str = ".env") -> None:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
+                if line.startswith("export "):
+                    line = line[len("export "):].lstrip()
                 key, _, value = line.partition("=")
                 key = key.strip()
                 value = _strip_quotes(value.strip())

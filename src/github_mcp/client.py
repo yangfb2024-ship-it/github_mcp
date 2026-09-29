@@ -137,13 +137,17 @@ class GitHubClient:
         params: Optional[Dict[str, Any]],
         headers: Optional[Dict[str, str]],
     ) -> httpx.Response:
-        '''Send a request, retrying transient failures with linear backoff.'''
+        '''Send a request, retrying transient failures with linear backoff.
+
+        Transport errors cover connection failures and timeouts; all requests
+        are read-only GETs, so retrying them is safe.
+        '''
         for attempt in range(MAX_RETRIES + 1):
             try:
                 response = await self._client.request(
                     method, path, params=params, headers=headers
                 )
-            except httpx.ConnectError:
+            except httpx.TransportError:
                 if attempt < MAX_RETRIES:
                     await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
                     continue

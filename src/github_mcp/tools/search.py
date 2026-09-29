@@ -110,10 +110,12 @@ def register_search_tools(mcp: FastMCP) -> None:
 
         Supports qualifiers such as language:, stars:, forks:, user:, org:, topics:,
         in:readme, is:fork, archived:true/false and more. Results are sorted by
-        best match unless a sort option is given.
+        best match unless a sort option is given. When the user wants popular,
+        high-quality, or most-starred repos, pass sort="stars" with order="desc".
 
         Examples:
             - Use when: "Find popular fastmcp servers in Python" -> q="fastmcp language:python" sort="stars"
+            - Use when: "Show the most starred AI agent frameworks" -> q="agent framework" sort="stars"
             - Use when: "Show unmaintained forks of react" -> q="fork:true archived:true repo:facebook/react"
             - Don't use when: you need code snippets inside files (use github_search_code)
         '''

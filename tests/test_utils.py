@@ -194,10 +194,18 @@ class TestRenderers:
         assert "Ada" in joined
 
     def test_render_user(self):
-        item = {"login": "octocat", "name": "Mona Lisa", "type": "User", "followers": 10, "html_url": "u"}
+        item = {"login": "octocat", "name": "Mona Lisa", "type": "User", "score": 1.5, "html_url": "u"}
         joined = "\n".join(render_user(item))
         assert "octocat" in joined
         assert "Mona Lisa" in joined
+
+    def test_render_user_has_no_fake_followers(self):
+        # The search API does not return followers/bio; they must not render
+        # as misleading placeholders.
+        item = {"login": "octocat", "type": "User", "score": 1.0, "html_url": "u"}
+        joined = "\n".join(render_user(item))
+        assert "Followers" not in joined
+        assert "Bio" not in joined
 
     def test_render_topic_strips_html(self):
         item = {

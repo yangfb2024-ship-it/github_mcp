@@ -122,18 +122,27 @@ def build_search_response(
 
     if response_format.value == "json":
         # Trim items until the payload fits the output budget, keeping the
-        # document valid JSON and flagging the truncation explicitly.
-        truncated = False
-        while True:
-            meta["count"] = len(items)
-            payload = {"items": items, **meta}
+        # document valid JSON and flagging the truncation explicitly. Fewer
+        # items always means a smaller payload, so a binary search finds the
+        # largest fitting prefix in O(log n) serializations.
+        def _serialize(kept: List[Dict[str, Any]], truncated: bool) -> str:
+            meta["count"] = len(kept)
+            payload = {"items": kept, **meta}
             if truncated:
                 payload["truncated"] = True
-            out = json.dumps(payload, indent=2, ensure_ascii=False)
-            if len(out) <= MAX_OUTPUT_CHARS or not items:
-                return out
-            items.pop()
-            truncated = True
+            return json.dumps(payload, indent=2, ensure_ascii=False)
+
+        out = _serialize(items, truncated=False)
+        if len(out) > MAX_OUTPUT_CHARS:
+            lo, hi = 0, len(items) - 1
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if len(_serialize(items[:mid], truncated=True)) <= MAX_OUTPUT_CHARS:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            out = _serialize(items[:lo], truncated=True)
+        return out
 
     if not items:
         return f"No results found for query. Total matches: {total_count}."
@@ -252,13 +261,13 @@ def render_commit(item: Dict[str, Any]) -> List[str]:
 
 
 def render_user(item: Dict[str, Any]) -> List[str]:
+    # The search API only returns login/type/score (followers, bio and name
+    # are exclusive to the user detail endpoint), so don't render fields that
+    # would show misleading placeholders like "Followers: 0".
     login = item.get("login", "?")
     name = item.get("name") or ""
     lines = [f"## {login} {f'({name})' if name else ''}"]
-    attrs = [f"Type: {item.get('type', '?')}", f"Followers: {item.get('followers', 0)}"]
-    if item.get("bio"):
-        attrs.append("Bio available")
-    lines.append(f"- **{' | '.join(attrs)}**")
+    lines.append(f"- **Type: {item.get('type', '?')} | Score: {item.get('score', 0)}**")
     lines.append(f"- URL: {item.get('html_url', '')}")
     lines.extend(_render_text_matches(item))
     return lines

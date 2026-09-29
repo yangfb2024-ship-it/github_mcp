@@ -18,6 +18,7 @@ from github_mcp.models import (
     ResponseFormat,
 )
 from github_mcp.utils import (
+    MAX_OUTPUT_CHARS,
     READ_ONLY_TOOL_ANNOTATIONS,
     get_github_client,
     handle_api_error,
@@ -32,7 +33,21 @@ def _client(ctx: Context) -> GitHubClient:
 
 
 def _to_json(data: Any) -> str:
-    return json.dumps(data, indent=2, ensure_ascii=False)
+    '''Serialize a detail payload to JSON within the output budget.
+
+    Oversized payloads (typically an embedded base64 'content' blob) have the
+    blob dropped so the JSON stays valid; anything still too large is hard
+    truncated with a note appended.
+    '''
+    out = json.dumps(data, indent=2, ensure_ascii=False)
+    if len(out) <= MAX_OUTPUT_CHARS:
+        return out
+    if isinstance(data, dict) and data.get("content"):
+        slim = {**data, "content": None, "truncated": True}
+        out = json.dumps(slim, indent=2, ensure_ascii=False)
+        if len(out) <= MAX_OUTPUT_CHARS:
+            return out
+    return truncate_output(out)
 
 
 def _render_repo_md(data: Dict[str, Any]) -> str:
@@ -64,25 +79,41 @@ def _render_repo_md(data: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _code_fence(content: str) -> str:
+    '''Return a backtick fence longer than any backtick run in the content.'''
+    return "````" if "```" in content else "```"
+
+
 def _render_readme_md(path: str, content: str, html_url: str) -> str:
+    fence = _code_fence(content)
     return (
         f"# README: {path}\n"
         f"Source: {html_url}\n\n"
-        f"```markdown\n{content}\n```"
+        f"{fence}markdown\n{content}\n{fence}"
     )
 
 
 def _render_file_md(data: Dict[str, Any], content: str) -> str:
     path = data.get("path", "?")
     size = data.get("size", 0)
-    if data.get("encoding") == "base64":
-        content = base64.b64decode(content).decode("utf-8", errors="replace")
+    encoding = data.get("encoding")
+    if encoding == "base64" and content:
+        raw = base64.b64decode(content)
+        # NUL bytes are a reliable tell for binary content.
+        if b"\x00" in raw[:8192]:
+            content = "(binary file)"
+        else:
+            content = raw.decode("utf-8", errors="replace")
+    elif encoding == "none":
+        # GitHub omits inline content for blobs above its 1 MB JSON limit.
+        content = "(content omitted: file exceeds GitHub's inline size limit)"
     elif not content:
-        content = "(binary file)"
+        content = "(empty file)" if size == 0 else "(binary file)"
+    fence = _code_fence(content)
     return (
         f"# File: {path} ({size} bytes)\n"
         f"URL: {data.get('html_url', '')}\n\n"
-        f"```\n{content}\n```"
+        f"{fence}\n{content}\n{fence}"
     )
 
 
@@ -184,23 +215,22 @@ def register_detail_tools(mcp: FastMCP) -> None:
         '''
         client = _client(ctx)
         params_ = {"ref": ref} if ref else None
+        if response_format.value == "json":
+            try:
+                data = await client.get(f"/repos/{repo}/readme", params_)
+            except Exception as e:
+                return handle_api_error(e, repo)
+            return _to_json(data)
+        # Markdown mode uses the raw media type: a single request, no base64
+        # decoding, and it also works for READMEs above the 1 MB JSON payload
+        # limit (where the metadata endpoint returns 403).
         try:
-            data = await client.get(f"/repos/{repo}/readme", params_)
+            content = await client.get_raw(f"/repos/{repo}/readme", params_)
         except Exception as e:
             return handle_api_error(e, repo)
-        if response_format.value == "json":
-            return _to_json(data)
-        content = ""
-        if data.get("encoding") == "base64" and data.get("content"):
-            content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
-        elif data.get("size", 0) > 0:
-            # README too large for the JSON payload (GitHub truncates content
-            # above 1 MB); fall back to the raw media type.
-            try:
-                content = await client.get_raw(f"/repos/{repo}/readme", params_)
-            except Exception:
-                content = ""
-        return truncate_output(_render_readme_md(data.get("path", "README"), content, data.get("html_url", "")))
+        return truncate_output(
+            _render_readme_md("README", content, f"https://github.com/{repo}#readme")
+        )
 
     @mcp.tool(
         name="github_get_file_content",

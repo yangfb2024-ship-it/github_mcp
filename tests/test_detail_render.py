@@ -7,6 +7,7 @@ from github_mcp.tools.detail import (
     _render_readme_md,
     _render_repo_md,
 )
+from github_mcp.utils import MAX_OUTPUT_CHARS
 
 
 class TestRepoMd:
@@ -51,6 +52,11 @@ class TestReadmeMd:
         assert "# README: README.md" in out
         assert "# Hello" in out
 
+    def test_fence_widened_when_content_has_backticks(self):
+        out = _render_readme_md("README.md", "```python\ncode\n```", "u")
+        assert "````markdown" in out
+        assert "```python\ncode\n```" in out
+
 
 class TestFileMd:
     def test_base64_decoded(self):
@@ -65,6 +71,41 @@ class TestFileMd:
         data = {"path": "logo.png", "size": 5, "html_url": "u"}
         out = _render_file_md(data, "")
         assert "(binary file)" in out
+
+    def test_zero_size_is_empty_not_binary(self):
+        data = {"path": "empty.txt", "size": 0, "html_url": "u"}
+        out = _render_file_md(data, "")
+        assert "(empty file)" in out
+
+    def test_encoding_none_reports_omitted(self):
+        data = {"path": "big.bin", "size": 1_500_000, "encoding": "none", "html_url": "u"}
+        out = _render_file_md(data, "")
+        assert "omitted" in out
+
+    def test_binary_base64_detected_by_nul(self):
+        import base64
+
+        content = base64.b64encode(b"\x89PNG\x00\x0d\x0a").decode()
+        data = {"path": "logo.png", "size": 7, "encoding": "base64", "html_url": "u"}
+        out = _render_file_md(data, content)
+        assert "(binary file)" in out
+
+
+class TestJsonBudget:
+    def test_oversized_content_dropped(self):
+        from github_mcp.tools.detail import _to_json
+
+        data = {"path": "big.py", "content": "x" * (MAX_OUTPUT_CHARS * 2)}
+        out = _to_json(data)
+        assert len(out) <= MAX_OUTPUT_CHARS
+        assert '"content": null' in out
+        assert '"truncated": true' in out
+
+    def test_small_payload_unchanged(self):
+        from github_mcp.tools.detail import _to_json
+
+        out = _to_json({"a": 1})
+        assert '"a": 1' in out
 
 
 class TestDirMd:

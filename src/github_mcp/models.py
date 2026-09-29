@@ -66,7 +66,11 @@ class RepoSearchInput(SearchInput):
     '''Input for repository search.'''
     sort: Optional[Literal["stars", "forks", "help-wanted-issues", "updated"]] = Field(
         default=None,
-        description="Sort by stars, forks, help-wanted-issues, or updated. Default: best match.",
+        description=(
+            "Sort by stars, forks, help-wanted-issues, or updated. Default: best match. "
+            "Pass 'stars' with order='desc' to rank by popularity when the user wants "
+            "high-quality, most-popular, or most-starred repos."
+        ),
     )
 
 
@@ -150,6 +154,14 @@ class RepoInput(BaseModel):
         default=ResponseFormat.MARKDOWN,
         description="Output format: 'markdown' for human-readable or 'json' for machine-readable.",
     )
+
+    @field_validator("repo")
+    @classmethod
+    def _reject_dot_only_segments(cls, v: str) -> str:
+        # ".." would otherwise be path-traversal after URL normalization.
+        if any(segment.strip(".") == "" for segment in v.split("/")):
+            raise ValueError("Repository segments cannot consist of dots only.")
+        return v
 
 
 class ReadmeInput(RepoInput):

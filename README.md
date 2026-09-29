@@ -86,6 +86,7 @@ MCP_TRANSPORT=stdio python -m github_mcp.server
 - code/issues/commits 请求 `text-match` 媒体类型，返回命中片段方便定位
 - 错误信息可行动：401 → 提示配 token；403 → 提示限速/等待；422 → 提示 qualifier 语法
 - 5xx 与连接错误自动线性退避重试（最多 2 次）；所有请求均为只读 GET，重试安全
-- 输出带字符预算（约 25k）：超长时 markdown 截断并提示收窄查询，JSON 自动裁减条目并标记 `truncated`
+- 输出带字符预算（约 25k）：超长时 markdown 截断并提示收窄查询，JSON 自动裁减条目并标记 `truncated`；detail 工具的 JSON 同样受预算约束（超大 `content` 字段省略并标记）
+- README markdown 模式走 raw 媒体类型：单请求、免 base64 解码，支持超过 1 MB 的 README
 - PR 详情会从 pulls 端点补充 `merge_commit_sha`（issues 端点不返回该字段）
 - token 从环境变量读取，不入代码；校验失败不会暴露内部错误

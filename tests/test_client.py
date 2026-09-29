@@ -112,6 +112,18 @@ class TestRetry:
         assert calls["n"] == 2
 
     @pytest.mark.asyncio
+    async def test_read_timeout_retried(self, monkeypatch):
+        client = GitHubClient()
+        calls = self._stub_responses(
+            monkeypatch,
+            client,
+            [httpx.ReadTimeout("slow"), _fake_response(200, {"ok": True})],
+        )
+        out = await client.request("GET", "/x")
+        assert out == {"ok": True}
+        assert calls["n"] == 2
+
+    @pytest.mark.asyncio
     async def test_non_json_body_returns_empty_dict(self, monkeypatch):
         client = GitHubClient()
         self._stub_responses(

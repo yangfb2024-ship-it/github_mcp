@@ -39,6 +39,15 @@ class TestLoadDotenv:
     def test_missing_file_is_noop(self, tmp_path):
         _load_dotenv(str(tmp_path / "nope.env"))  # must not raise
 
+    def test_export_prefix_accepted(self, tmp_path, monkeypatch):
+        env = tmp_path / ".env"
+        env.write_text('export GITHUB_TOKEN="tok123"\nexport PLAIN=value\n')
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("PLAIN", raising=False)
+        _load_dotenv(str(env))
+        assert os.environ["GITHUB_TOKEN"] == "tok123"
+        assert os.environ["PLAIN"] == "value"
+
 
 class TestCreateServer:
     def test_registers_all_tools(self):

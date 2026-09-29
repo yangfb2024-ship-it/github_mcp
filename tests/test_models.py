@@ -36,6 +36,15 @@ class TestRepoInput:
         with pytest.raises(ValidationError):
             RepoInput(repo="a/b", bogus=1)
 
+    def test_dot_only_segments_rejected(self):
+        # ".." segments could otherwise traverse the API path after URL
+        # normalization; real names containing dots (".github") stay valid.
+        with pytest.raises(ValidationError):
+            RepoInput(repo="a/..")
+        with pytest.raises(ValidationError):
+            RepoInput(repo="../b")
+        assert RepoInput(repo="a/.github").repo == "a/.github"
+
 
 class TestSearchInput:
     def test_valid_query(self):
